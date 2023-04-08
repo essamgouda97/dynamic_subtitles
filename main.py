@@ -1,9 +1,5 @@
-from pathlib import Path
-
-from PIL import Image
-
+# For files paths
 import os
-
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 os.chdir(dname)

@@ -2,10 +2,10 @@ from PIL import Image, ImageDraw, ImageFont
 import extcolors
 import numpy as np
 import cv2
-import datetime
 import sqlite3
 import pysrt
 import os
+from natsort import natsorted
 
 def get_image_colors(image: Image.Image):
     return extcolors.extract_from_image(image, tolerance = 12, limit = 12)
@@ -22,7 +22,7 @@ def add_text_to_image(
         font_size=18,
         text_position=None,
         output_path=None,
-        font_path="config/font.ttf"
+        font_path="config/roboto_mono.ttf"
     ):
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype(font_path, font_size)
@@ -40,7 +40,6 @@ def add_text_to_image(
         image.save(output_path)
     
     return image
-
 
 def save_frames_to_db(video_path, frames_folder_path, db_path="outputs/frames.db"):
     
@@ -98,7 +97,8 @@ def get_frames_between_timestamps(start_timestamp, end_timestamp, db_path="outpu
     conn.close()
 
     return paths
-def add_text_to_video(subtitles_path):
+
+def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="outputs/frames.db"):
     # Read subtitles
     subs = pysrt.open(subtitles_path)
 
@@ -115,14 +115,16 @@ def add_text_to_video(subtitles_path):
                         + subs[sub_idx].end.to_time().microsecond // 1000
         
         # Get the frames between the start and end timestamps
-        frames_paths = get_frames_between_timestamps(start_time_ms, end_time_ms)
+        frames_paths = get_frames_between_timestamps(start_time_ms, end_time_ms, db_path=db_path)
         
         # Add text to the frames and save them with the same file name
-        mid_frame = frames_paths[len(frames_paths) // 2]
-        colors, pixel_count = get_image_colors(Image.open(mid_frame))
+        # mid_frame = frames_paths[len(frames_paths) // 2]
+        # colors, pixel_count = get_image_colors(Image.open(mid_frame))
+        # text_color = colors[3][0] # 4th most frequent color, magic number
+        # stroke_fill = colors[-1][0] # last color, magic number
+        
         for frame_path in frames_paths:
             img = Image.open(frame_path)
-            draw = ImageDraw.Draw(img)
             text = subs[sub_idx].text
             colors, pixel_count = get_image_colors(img)
             text_color = colors[3][0] # 4th most frequent color, magic number
@@ -130,15 +132,15 @@ def add_text_to_video(subtitles_path):
             img_with_text = add_text_to_image(
                 text=text,
                 text_color=text_color,
-                stroke_width=1,
+                stroke_width=stroke_width,
                 stroke_fill=stroke_fill, 
                 image=img,
-                font_size=20,
+                font_size=font_size,
             )
             img_with_text.save(frame_path)
 
 def create_video_from_frames(frames_dir, output_path, fps):
-    frame_files = sorted(os.listdir(frames_dir))
+    frame_files = natsorted((os.listdir(frames_dir)))
     frame_paths = [os.path.join(frames_dir, f) for f in frame_files]
     size = cv2.imread(frame_paths[0]).shape[:2][::-1]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
