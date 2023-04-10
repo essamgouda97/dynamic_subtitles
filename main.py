@@ -21,7 +21,7 @@ except ImportError:
         extract_audio,
         merge_audio,
     )
-NAME = "blade_runner"
+NAME = "burning"
 FRAMES_DIR = f"outputs/frames/{NAME}"
 
 if __name__ == "__main__":
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     print("Saving frames to database...")
     fps = save_frames_to_db(f"inputs/{NAME}.mp4", FRAMES_DIR, end_time=300000, db_path=f"outputs/frames_{NAME}.db")
     print(f"Adding text to frames (fps={fps})...")
-    add_text_to_video(f"inputs/{NAME}.srt", font_size=40)
+    add_text_to_video(f"inputs/{NAME}.srt", font_size=40, db_path=f"outputs/frames_{NAME}.db", font_path="config/futura.ttf")
     print("Creating video from frames...")
     create_video_from_frames(FRAMES_DIR, f"outputs/{NAME}.mp4", fps)
     

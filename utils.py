@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import sqlite3
 import pysrt
-import os, subprocess
+import os, subprocess, colorsys
 from natsort import natsorted
 
 # def get_image_colors(image: Image.Image):
@@ -62,35 +62,44 @@ def add_text_to_image(
         text_position=None,
         output_path=None,
         font_path="config/roboto_mono.ttf",
-    ):
+        stroke_width_ratio=0.05,
+        scene_color=None,
+):
     
     # Create the image
     image = Image.open(image_path)
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype(font_path, font_size)
     text_width, text_height = draw.textsize(text, font=font)
-    actual_text_height = font.getsize(text)[1]
     
     # Adjust the vertical position of the text based on font size and actual text height
     if text_position is None:
         x = (image.width - text_width) // 2
-        y = image.height - actual_text_height - font_size
+        y = image.height - text_height - int(font_size*1.5)
     else:
         x, y = text_position
     
-    # Set the text color to match the scene color
-    text_color = tuple(font_color) if sum(font_color) > 382 else tuple([255-c for c in font_color])
+    # Calculate the stroke width based on the font size
+    stroke_width = max(1, int(font_size * stroke_width_ratio))
     
     # Add stroke to the text
-    stroke_width = int(font_size/12)
     stroke_fill = tuple([255-c for c in font_color])
-    if stroke_fill is not None:
-        draw.text((x-stroke_width, y), text, font=font, fill=stroke_fill)
-        draw.text((x+stroke_width, y), text, font=font, fill=stroke_fill)
-        draw.text((x, y-stroke_width), text, font=font, fill=stroke_fill)
-        draw.text((x, y+stroke_width), text, font=font, fill=stroke_fill)
+    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+        draw.text((x+dx*stroke_width, y+dy*stroke_width), text, font=font, fill=stroke_fill)
+    
+    # Set the text color to a mix of the font color and the scene color
+    if scene_color is not None:
+        alpha = 0.5
+        text_color = (
+            int((1 - alpha) * font_color[0] + alpha * scene_color[0]),
+            int((1 - alpha) * font_color[1] + alpha * scene_color[1]),
+            int((1 - alpha) * font_color[2] + alpha * scene_color[2])
+        )
+    else:
+        text_color = tuple(font_color) if sum(font_color) > 382 else tuple([255-c for c in font_color])
     
     draw.text((x, y), text, text_color, font=font)
+    
     if output_path:
         image.save(output_path)
     
@@ -158,7 +167,8 @@ def get_frames_between_timestamps(start_timestamp, end_timestamp, db_path="outpu
 
     return paths
 
-def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="outputs/frames.db"):
+
+def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="outputs/frames.db", font_path="config/roboto_mono.ttf"):
     # Read subtitles
     subs = pysrt.open(subtitles_path)
 
@@ -178,6 +188,12 @@ def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="out
         frames_paths = get_frames_between_timestamps(start_time_ms, end_time_ms, db_path=db_path)
         if frames_paths:
             scene_color = get_scene_color(frames_paths)
+            # Convert RGB to HSL
+            h, l, s = colorsys.rgb_to_hls(*scene_color)
+            # Increase lightness by 0.2
+            l += 0.2
+            # Convert back to RGB
+            scene_color = tuple(round(c * 255) for c in colorsys.hls_to_rgb(h, l, s))
             text = subs[sub_idx].text
             for frame_path in frames_paths:
                 img = cv2.imread(frame_path)
@@ -186,7 +202,8 @@ def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="out
                     text=text,
                     image_path=frame_path,
                     font_size=font_size,
-                    output_path=frame_path
+                    output_path=frame_path,
+                    font_path=font_path,
                 )
 
 def create_video_from_frames(frames_dir, output_path, fps):
