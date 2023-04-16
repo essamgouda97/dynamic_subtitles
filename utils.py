@@ -1,219 +1,235 @@
-from PIL import Image, ImageDraw, ImageFont
 # import extcolors
-import numpy as np
 import cv2
 import sqlite3
 import pysrt
-import os, subprocess, colorsys
 from natsort import natsorted
 
-# def get_image_colors(image: Image.Image):
-#     return extcolors.extract_from_image(image, tolerance = 12, limit = 12)
+from pathlib import Path
+import importlib
+import subprocess
+import time
+import os
+import re
+from tqdm import tqdm
 
-def merge_audio(video_path, audio_path, output_path):
-    subprocess.run(['ffmpeg', '-i', video_path, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0', '-shortest', '-y',output_path], check=True)
+try:
+    from substyles.base import BaseSubstyle
+except ModuleNotFoundError:
+    from dynamic_subtitles.substyles.base import BaseSubstyle
 
-def extract_audio(input_path, output_path):
-    subprocess.run(['ffmpeg', '-i', input_path, '-vn', '-acodec', 'copy', '-y', output_path], check=True)
+class MainRunner():
+    def __init__(self, 
+                input_file: str,
+                output_file: str,
+                subtitle_file: str,
+                subtyle_name: str,
+                font_path: str,
+                db_path: str = "outputs/db",
+                end_time = None,
+                frames_path: str = "outputs/frames",
+                **kwargs
+            ):
+        self.input_file  = Path(input_file)
+        self.output_file = Path(output_file)
+        self.subtitle_file = Path(subtitle_file)
+        self.substyle_name = subtyle_name
+        self.font_path = Path(font_path)
+        self.frames_path = Path(frames_path)
+        self.db_path = Path(db_path)
+        self.db_path.mkdir(parents=True, exist_ok=True)
+        self.end_time = float(end_time) if end_time else None
+        self.project_name = self._get_project_name(self.input_file.stem)
+        self.frames_dir = self.frames_path / f'{self.project_name}_frames'
+        self.db_file = self.db_path / f'{self.project_name}.db'
+        self.kwargs = kwargs
+        
+        # Parse args
+        try:
+            self._parse_validator()
+        except Exception as e:
+            raise Exception("[ERROR] Invalid args: ", e)
+        
+        self._confirm_ffmpeg_installation()
+        
 
-def get_image_colors(frame_paths, n_clusters=5, batch_size=10):
-    palette = []
-    for i in range(0, len(frame_paths), batch_size):
-        batch_frame_paths = frame_paths[i:i+batch_size]
-        batch_frames = [cv2.imread(frame_path) for frame_path in batch_frame_paths]
-        combined_image = np.hstack(batch_frames)
-        data = cv2.resize(combined_image, (100, 100)).reshape(-1, 3)
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        flags = cv2.KMEANS_RANDOM_CENTERS
-        compactness, labels, centers = cv2.kmeans(data.astype(np.float32), n_clusters, None, criteria, 10, flags)
-        cluster_sizes = np.bincount(labels.flatten())
-        batch_palette = []
-        for cluster_idx in np.argsort(-cluster_sizes):
-            batch_palette.append(np.full((combined_image.shape[0], combined_image.shape[1], 3), fill_value=centers[cluster_idx].astype(int), dtype=np.uint8))
-        palette.extend(batch_palette)
-    return np.hstack(palette)
-
-def get_avg_color(list_of_colors):
-    return tuple(np.average(np.array(list_of_colors), axis=0).astype(int))
-def get_scene_color(scene_paths, n_clusters=5, batch_size=10):
-    palette = []
-    for i in range(0, len(scene_paths), batch_size):
-        batch_frame_paths = scene_paths[i:i+batch_size]
-        batch_frames = [cv2.imread(frame_path) for frame_path in batch_frame_paths]
-        combined_image = np.hstack(batch_frames)
-        data = cv2.resize(combined_image, (100, 100)).reshape(-1, 3)
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        flags = cv2.KMEANS_RANDOM_CENTERS
-        compactness, labels, centers = cv2.kmeans(data.astype(np.float32), n_clusters, None, criteria, 10, flags)
-        cluster_sizes = np.bincount(labels.flatten())
-        batch_palette = []
-        for cluster_idx in np.argsort(-cluster_sizes):
-            batch_palette.append(centers[cluster_idx].astype(int))
-        palette.extend(batch_palette)
-    palette = np.array(palette)
-    dominant_color = palette[np.argmax(np.sum(palette, axis=1)), :]
-    return dominant_color
-
-def add_text_to_image(
-        font_color,
-        text,
-        image_path,
-        font_size=18,
-        text_position=None,
-        output_path=None,
-        font_path="config/roboto_mono.ttf",
-        stroke_width_ratio=0.05,
-        scene_color=None,
-):
     
-    # Create the image
-    image = Image.open(image_path)
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype(font_path, font_size)
-    text_width, text_height = draw.textsize(text, font=font)
+    def _confirm_ffmpeg_installation(self):
+        """
+            Confirms that ffmpeg is installed on the system
+        """
+        
+        try:
+            self._run_subprocess(["ffmpeg", "-version"])
+        except subprocess.CalledProcessError:
+            raise Exception("ffmpeg is not installed.")
     
-    # Adjust the vertical position of the text based on font size and actual text height
-    if text_position is None:
-        x = (image.width - text_width) // 2
-        y = image.height - text_height - int(font_size*1.5)
-    else:
-        x, y = text_position
+    def _validate_video_file_path(self, file_path: str):
+        try:
+            if self.end_time:
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-t", f'{int(self.end_time)/1000:.3f}', "-f", "null", "-"], stderr=subprocess.DEVNULL)
+            else:
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-f", "null", "-"], stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            raise ValueError(f"[ERROR] {file_path} does not exist or is not a valid video format")
     
-    # Calculate the stroke width based on the font size
-    stroke_width = max(1, int(font_size * stroke_width_ratio))
+    def _validate_file_path(self, file_path: Path):
+        if not file_path.exists():
+            raise FileNotFoundError(f"[ERROR] {file_path} does not exist")
     
-    # Add stroke to the text
-    stroke_fill = tuple([255-c for c in font_color])
-    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-        draw.text((x+dx*stroke_width, y+dy*stroke_width), text, font=font, fill=stroke_fill)
+    def _import_substyle(self):
+        substyle_module = importlib.import_module(f'substyles.{self.substyle_name}')
+        substyle_class = getattr(substyle_module, f'{self.substyle_name.capitalize()}Substyle')
+        
+        if not issubclass(substyle_class, BaseSubstyle):
+            raise ValueError(f"[ERROR] {self.substyle_name} is not a valid substyle")
+        
+        self.substyle = substyle_class(self.font_path, **self.kwargs)
     
-    # Set the text color to a mix of the font color and the scene color
-    if scene_color is not None:
-        alpha = 0.5
-        text_color = (
-            int((1 - alpha) * font_color[0] + alpha * scene_color[0]),
-            int((1 - alpha) * font_color[1] + alpha * scene_color[1]),
-            int((1 - alpha) * font_color[2] + alpha * scene_color[2])
-        )
-    else:
-        text_color = tuple(font_color) if sum(font_color) > 382 else tuple([255-c for c in font_color])
+    def _parse_validator(self):
+        """
+            Args validator
+        """
+        self._validate_video_file_path(str(self.input_file))
+        self._validate_file_path(self.subtitle_file)
+        self._validate_file_path(self.font_path)
+        self._import_substyle()
+        
     
-    draw.text((x, y), text, text_color, font=font)
+    def _get_project_name(self, input_str: str):
+        """
+            Returns the project name from the input file name
+        """
+        return re.sub(r"\s+", "", input_str)
     
-    if output_path:
-        image.save(output_path)
+    def _run_subprocess(self, args: list, print_output: bool = False):
+        """
+            Runs a subprocess
+        """
+        if print_output:
+            subprocess.run(args, check=True)
+        else:
+            subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    return image, (x, y)
-
-def save_frames_to_db(video_path, frames_folder_path, end_time=None, db_path="outputs/frames.db"):
+    def extract_audio(self):
+        """
+            Extracts audio from the video
+        """
+        print(f"[INFO] Extracting audio from {self.input_file}")
+        start_time = time.time()
+        self.audio_output = str(self.input_file.parent / f'{self.input_file.stem}.aac')
+        if self.end_time:
+            self._run_subprocess([
+                'ffmpeg',
+                '-i',
+                str(self.input_file),
+                '-vn',
+                '-acodec',
+                'copy',
+                '-t',
+                f'{self.end_time/1000:.3f}',
+                '-y',
+                self.audio_output
+                ], print_output=True)
+        else:
+            self._run_subprocess([
+                'ffmpeg',
+                '-i',
+                str(self.input_file),
+                '-vn',
+                '-acodec',
+                'copy',
+                '-y',
+                self.audio_output
+                ], print_output=True)
+        print(f"[INFO] Audio extraction completed in {time.time() - start_time:.3f} seconds")
     
-    # Create folder to save frames
-    if not os.path.exists(frames_folder_path):
-        os.makedirs(frames_folder_path)
+    def extract_frames(self):
+        """
+            Extracts frames from the video
+        """
+        print(f"[INFO] Extracting frames from {self.input_file}")
+        start_time = time.time()
+    
+        # Create folder to save frames
+        self.frames_dir.mkdir(parents=True, exist_ok=True)
 
-    # Connect to SQLite database
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
+        # Connect to SQLite database
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
 
-    # Create table if it doesn't exist
-    c.execute('''CREATE TABLE IF NOT EXISTS frames
-                 (timestamp REAL PRIMARY KEY, path TEXT)''')
+        # Create table if it doesn't exist
+        c.execute('''CREATE TABLE IF NOT EXISTS frames
+                    (timestamp REAL PRIMARY KEY, path TEXT)''')
 
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
+        cap = cv2.VideoCapture(str(self.input_file))
+        self.fps = cap.get(cv2.CAP_PROP_FPS)
 
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        max_frames = int((self.end_time / 1000) * self.fps) if self.end_time else frame_count
+        
+        for i in tqdm(range(max_frames), desc="Extracting frames"):
+            ret, frame = cap.read()
+            if ret:
+                timestamp = cap.get(cv2.CAP_PROP_POS_MSEC)
+                frame_name = str(i) + ".png"
+                frame_path = os.path.join(self.frames_dir, frame_name)
 
-    for i in range(frame_count):
-        ret, frame = cap.read()
+                # Save frame to file
+                cv2.imwrite(frame_path, frame)
 
-        if ret:
-            timestamp = cap.get(cv2.CAP_PROP_POS_MSEC)
+                # Insert timestamp and frame path into database
+                c.execute("INSERT OR REPLACE INTO frames VALUES (?, ?)", (timestamp, frame_path))
+                conn.commit()
 
-            # Break if timestamp exceeds end_time
-            if end_time is not None and timestamp > end_time:
+            else:
                 break
 
-            frame_name = str(timestamp) + ".jpg"
-            frame_path = os.path.join(frames_folder_path, frame_name)
-
-            # Save frame to file
-            cv2.imwrite(frame_path, frame)
-
-            # Insert timestamp and frame path into database
-            c.execute("INSERT OR REPLACE INTO frames VALUES (?, ?)", (timestamp, frame_path))
-            conn.commit()
-
-        else:
-            break
-
-    # Close database connection
-    conn.close()
+        # Close database connection
+        conn.close()
+        print(f"[INFO] Frame extraction completed in {time.time() - start_time:.3f} seconds")
     
-    return fps
+    def add_text_to_video(self):
+        # Read subtitles
+        subs = pysrt.open(str(self.subtitle_file))
 
-def get_frames_between_timestamps(start_timestamp, end_timestamp, db_path="outputs/frames.db"):
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
+        # Loop over each subtitle and add text to the corresponding frames
+        for sub_idx in range(len(subs)):
+            # Compute the start and end timestamps in milliseconds
+            start_time_ms = subs[sub_idx].start.to_time().hour * 3600000 \
+                            + subs[sub_idx].start.to_time().minute * 60000 \
+                            + subs[sub_idx].start.to_time().second * 1000 \
+                            + subs[sub_idx].start.to_time().microsecond // 1000
+            if start_time_ms > self.end_time:
+                break
+            end_time_ms = subs[sub_idx].end.to_time().hour * 3600000 \
+                            + subs[sub_idx].end.to_time().minute * 60000 \
+                            + subs[sub_idx].end.to_time().second * 1000 \
+                            + subs[sub_idx].end.to_time().microsecond // 1000
+            
+            # Get the frames between the start and end timestamps
+            frames_paths = self._get_frames_between_timestamps(start_time_ms, end_time_ms)
+            if frames_paths:
+                # Add text to the frames
+                self.substyle.add_text_to_frames(frames_paths, subs[sub_idx].text)
+            else:
+                print(f"[WARNING] No frames found between {start_time_ms} and {end_time_ms}")
+    
+    def create_video_from_frames(self):
+        cmd = ["ffmpeg", "-r", str(self.fps),"-i", f"{self.frames_dir}/%d.png", "-i", self.audio_output, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", self.output_file]
 
-    # Query the database for all frames between the start and end timestamps
-    c.execute("SELECT path FROM frames WHERE timestamp BETWEEN ? AND ?", (start_timestamp, end_timestamp))
-    rows = c.fetchall()
+        self._run_subprocess(cmd)
 
-    # Extract the paths from the rows and return them as a list
-    paths = [row[0] for row in rows]
+    def _get_frames_between_timestamps(self, start_time, end_time):
+        conn = sqlite3.connect(self.db_file)
+        c = conn.cursor()
 
-    conn.close()
+        # Query the database for all frames between the start and end timestamps
+        c.execute("SELECT path FROM frames WHERE timestamp BETWEEN ? AND ?", (start_time, end_time))
+        rows = c.fetchall()
 
-    return paths
+        # Extract the paths from the rows and return them as a list
+        paths = [row[0] for row in rows]
 
+        conn.close()
 
-def add_text_to_video(subtitles_path, stroke_width=1, font_size=20, db_path="outputs/frames.db", font_path="config/roboto_mono.ttf"):
-    # Read subtitles
-    subs = pysrt.open(subtitles_path)
-
-    # Loop over each subtitle and add text to the corresponding frames
-    for sub_idx in range(len(subs)):
-        # Compute the start and end timestamps in milliseconds
-        start_time_ms = subs[sub_idx].start.to_time().hour * 3600000 \
-                        + subs[sub_idx].start.to_time().minute * 60000 \
-                        + subs[sub_idx].start.to_time().second * 1000 \
-                        + subs[sub_idx].start.to_time().microsecond // 1000
-        end_time_ms = subs[sub_idx].end.to_time().hour * 3600000 \
-                        + subs[sub_idx].end.to_time().minute * 60000 \
-                        + subs[sub_idx].end.to_time().second * 1000 \
-                        + subs[sub_idx].end.to_time().microsecond // 1000
-        
-        # Get the frames between the start and end timestamps
-        frames_paths = get_frames_between_timestamps(start_time_ms, end_time_ms, db_path=db_path)
-        if frames_paths:
-            scene_color = get_scene_color(frames_paths)
-            # Convert RGB to HSL
-            h, l, s = colorsys.rgb_to_hls(*scene_color)
-            # Increase lightness by 0.2
-            l += 0.2
-            # Convert back to RGB
-            scene_color = tuple(round(c * 255) for c in colorsys.hls_to_rgb(h, l, s))
-            text = subs[sub_idx].text
-            for frame_path in frames_paths:
-                img = cv2.imread(frame_path)
-                img_with_text = add_text_to_image(
-                    font_color=scene_color,
-                    text=text,
-                    image_path=frame_path,
-                    font_size=font_size,
-                    output_path=frame_path,
-                    font_path=font_path,
-                )
-
-def create_video_from_frames(frames_dir, output_path, fps):
-    frame_files = natsorted((os.listdir(frames_dir)))
-    frame_paths = [os.path.join(frames_dir, f) for f in frame_files]
-    size = cv2.imread(frame_paths[0]).shape[:2][::-1]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, size)
-    for frame_path in frame_paths:
-        frame = cv2.imread(frame_path)
-        out.write(frame)
-    out.release()
-    cv2.destroyAllWindows()
+        return paths
