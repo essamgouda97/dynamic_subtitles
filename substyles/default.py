@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List
 
 try:
-    from substyles.base import BaseSubstyles
+    from substyles.base import BaseSubstyle
 except ImportError:
     from dynamic_subtitles.substyles.base import BaseSubstyle
     
@@ -58,7 +58,7 @@ class DefaultSubstyle(BaseSubstyle):
         # Create the image
         image = Image.open(image_path)
         draw = ImageDraw.Draw(image)
-        font = ImageFont.truetype(font_path, self.font_size)
+        font = ImageFont.truetype(str(font_path), self.font_size)
         text_width, text_height = draw.textsize(self.subtitle_text, font=font)
         
         # Adjust the vertical position of the text based on font size and actual text height
@@ -90,7 +90,7 @@ class DefaultSubstyle(BaseSubstyle):
         draw.text((x, y), self.subtitle_text, text_color, font=font)
         
         if output_path:
-            image.save(output_path)
+            image.save(str(output_path))
         
         return image, (x, y)
 

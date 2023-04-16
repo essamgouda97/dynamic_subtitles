@@ -10,7 +10,7 @@ import subprocess
 import time
 import os
 import re
-import tqdm
+from tqdm import tqdm
 
 try:
     from substyles.base import BaseSubstyle
@@ -29,27 +29,29 @@ class MainRunner():
                 frames_path: str = "outputs/frames",
                 **kwargs
             ):
-        self.input_file = input_file
-        self.output_file = output_file
-        self.subtitle_file = subtitle_file
-        self.subtyle_name = subtyle_name
-        self.font_path = font_path
-        self.db_path = db_path
-        self.end_time = end_time
-        self.frames_path = frames_path
+        self.input_file  = Path(input_file)
+        self.output_file = Path(output_file)
+        self.subtitle_file = Path(subtitle_file)
+        self.substyle_name = subtyle_name
+        self.font_path = Path(font_path)
+        self.frames_path = Path(frames_path)
+        self.db_path = Path(db_path)
+        self.db_path.mkdir(parents=True, exist_ok=True)
+        self.end_time = float(end_time) if end_time else None
         self.project_name = self._get_project_name(self.input_file.stem)
         self.frames_dir = self.frames_path / f'{self.project_name}_frames'
         self.db_file = self.db_path / f'{self.project_name}.db'
         self.kwargs = kwargs
-        
-        
-        self._confirm_ffmpeg_installation()
         
         # Parse args
         try:
             self._parse_validator()
         except Exception as e:
             raise Exception("[ERROR] Invalid args: ", e)
+        
+        self._confirm_ffmpeg_installation()
+        
+
     
     def _confirm_ffmpeg_installation(self):
         """
@@ -62,18 +64,25 @@ class MainRunner():
         except subprocess.CalledProcessError:
             raise Exception("ffmpeg is not installed.")
     
-    def _validate_file_path(self, file_path: str):
+    def _validate_video_file_path(self, file_path: str):
         try:
-            subprocess.check_output(["ffmpeg", "-i", file_path])
+            if self.end_time:
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-t", f'{int(self.end_time)/1000:.3f}', "-f", "null", "-"])
+            else:
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-f", "null", "-"])
         except subprocess.CalledProcessError:
             raise ValueError(f"[ERROR] {file_path} does not exist or is not a valid video format")
     
+    def _validate_file_path(self, file_path: Path):
+        if not file_path.exists():
+            raise FileNotFoundError(f"[ERROR] {file_path} does not exist")
+    
     def _import_substyle(self):
-        substyle_module = importlib.import_module(f'substyles.{self.subtyle_name}')
-        substyle_class = getattr(substyle_module, f'{self.subtyle_name.capitalize()}Substyle')
+        substyle_module = importlib.import_module(f'substyles.{self.substyle_name}')
+        substyle_class = getattr(substyle_module, f'{self.substyle_name.capitalize()}Substyle')
         
-        if not isinstance(substyle_class, BaseSubstyle):
-            raise ValueError(f"[ERROR] {self.subtyle_name} is not a valid substyle")
+        if not issubclass(substyle_class, BaseSubstyle):
+            raise ValueError(f"[ERROR] {self.substyle_name} is not a valid substyle")
         
         self.substyle = substyle_class(self.font_path, **self.kwargs)
     
@@ -81,18 +90,11 @@ class MainRunner():
         """
             Args validator
         """
-        self.input_file  = Path(self.input_file)
-        self.output_file = Path(self.output_file)
-        self.subtitle_file = Path(self.subtitle_file)
-        self.font_path = Path(self.font_path)
-        self.db_path = Path(self.db_path)
-        self.db_path.mkdir(parents=True, exist_ok=True)
-        
-        self._validate_file_path(self.input_file)
-        self._validate_file_path(self.output_file)
+        self._validate_video_file_path(str(self.input_file))
         self._validate_file_path(self.subtitle_file)
         self._validate_file_path(self.font_path)
         self._import_substyle()
+        
     
     def _get_project_name(self, input_str: str):
         """
@@ -108,8 +110,31 @@ class MainRunner():
         print(f"[INFO] Extracting audio from {self.input_file}")
         start_time = time.time()
         self.audio_output = str(self.input_file.parent / f'{self.input_file.stem}_audio.aac')
-        subprocess.run(['ffmpeg', '-i', self.input_path, '-vn', '-acodec', 'copy', '-y', self.audio_output], check=True)
-        print(f"[INFO] Audio extraction completed in {time.time() - start_time} seconds")
+        if self.end_time:
+            subprocess.run([
+                'ffmpeg',
+                '-i',
+                str(self.input_file),
+                '-vn',
+                '-acodec',
+                'copy',
+                '-t',
+                f'{self.end_time/1000:.3f}',
+                '-y',
+                self.audio_output
+                ], check=True)
+        else:
+            subprocess.run([
+                'ffmpeg',
+                '-i',
+                str(self.input_file),
+                '-vn',
+                '-acodec',
+                'copy',
+                '-y',
+                self.audio_output
+                ], check=True)
+        print(f"[INFO] Audio extraction completed in {time.time() - start_time:.3f} seconds")
     
     def extract_frames(self):
         """
@@ -129,20 +154,16 @@ class MainRunner():
         c.execute('''CREATE TABLE IF NOT EXISTS frames
                     (timestamp REAL PRIMARY KEY, path TEXT)''')
 
-        cap = cv2.VideoCapture(self.input_file)
+        cap = cv2.VideoCapture(str(self.input_file))
         self.fps = cap.get(cv2.CAP_PROP_FPS)
 
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        for i in tqdm(range(frame_count), desc="Extracting frames"):
+        max_frames = int((self.end_time / 1000) * self.fps) if self.end_time else frame_count
+        
+        for i in tqdm(range(max_frames), desc="Extracting frames"):
             ret, frame = cap.read()
             if ret:
                 timestamp = cap.get(cv2.CAP_PROP_POS_MSEC)
-
-                # Break if timestamp exceeds end_time
-                if self.end_time is not None and timestamp > self.end_time:
-                    break
-
                 frame_name = str(timestamp) + ".jpg"
                 frame_path = os.path.join(self.frames_dir, frame_name)
 
@@ -158,11 +179,11 @@ class MainRunner():
 
         # Close database connection
         conn.close()
-        print(f"[INFO] Frame extraction completed in {time.time() - start_time} seconds")
+        print(f"[INFO] Frame extraction completed in {time.time() - start_time:.3f} seconds")
     
     def add_text_to_video(self):
         # Read subtitles
-        subs = pysrt.open(self.subtitle_file)
+        subs = pysrt.open(str(self.subtitle_file))
 
         # Loop over each subtitle and add text to the corresponding frames
         for sub_idx in range(len(subs)):
@@ -189,9 +210,9 @@ class MainRunner():
         cmd = ["ffmpeg", "-r", str(self.fps)]
 
         # Add frames to the video clip
-        for frame in tqdm(frame_files, desc="Creating video"):
+        for frame in frame_files:
             cmd.extend(["-i", f"{self.frames_dir}/{frame}"])
-        cmd.extend(["-i", self.audio_output, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", self.output_file])
+        cmd.extend(["-i", self.audio_output, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", str(self.output_file)])
         subprocess.run(cmd, check=True)
 
     def _get_frames_between_timestamps(self, start_time, end_time):
