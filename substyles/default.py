@@ -2,6 +2,7 @@ import colorsys
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from tqdm import tqdm
 
 from typing import List
 
@@ -37,7 +38,7 @@ class DefaultSubstyle(BaseSubstyle):
         # Convert back to RGB
         scene_color = tuple(round(c * 255) for c in colorsys.hls_to_rgb(h, l, s))
         text = self.subtitle_text
-        for frame_path in self.frames_path:
+        for frame_path in tqdm(self.frames_path, desc="Adding text to frames"):
             img_with_text = self.add_text_to_image(
                 font_color=scene_color,
                 image_path=frame_path,
