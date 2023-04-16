@@ -59,8 +59,7 @@ class MainRunner():
         """
         
         try:
-            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True, text=True)
-            print(result.stdout)
+            self._run_subprocess(["ffmpeg", "-version"])
         except subprocess.CalledProcessError:
             raise Exception("ffmpeg is not installed.")
     
@@ -102,11 +101,14 @@ class MainRunner():
         """
         return re.sub(r"\s+", "", input_str)
     
-    def _run_subprocess(self, args: list):
+    def _run_subprocess(self, args: list, print_output: bool = False):
         """
             Runs a subprocess
         """
-        subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if print_output:
+            subprocess.run(args, check=True)
+        else:
+            subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     def extract_audio(self):
         """
@@ -127,7 +129,7 @@ class MainRunner():
                 f'{self.end_time/1000:.3f}',
                 '-y',
                 self.audio_output
-                ])
+                ], print_output=True)
         else:
             self._run_subprocess([
                 'ffmpeg',
@@ -138,7 +140,7 @@ class MainRunner():
                 'copy',
                 '-y',
                 self.audio_output
-                ])
+                ], print_output=True)
         print(f"[INFO] Audio extraction completed in {time.time() - start_time:.3f} seconds")
     
     def extract_frames(self):
