@@ -67,9 +67,9 @@ class MainRunner():
     def _validate_video_file_path(self, file_path: str):
         try:
             if self.end_time:
-                subprocess.check_output(["ffmpeg", "-i", file_path, "-t", f'{int(self.end_time)/1000:.3f}', "-f", "null", "-"])
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-t", f'{int(self.end_time)/1000:.3f}', "-f", "null", "-"], stderr=subprocess.DEVNULL)
             else:
-                subprocess.check_output(["ffmpeg", "-i", file_path, "-f", "null", "-"])
+                subprocess.check_output(["ffmpeg", "-i", file_path, "-f", "null", "-"], stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             raise ValueError(f"[ERROR] {file_path} does not exist or is not a valid video format")
     
@@ -101,7 +101,12 @@ class MainRunner():
             Returns the project name from the input file name
         """
         return re.sub(r"\s+", "", input_str)
-        
+    
+    def _run_subprocess(self, args: list):
+        """
+            Runs a subprocess
+        """
+        subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     def extract_audio(self):
         """
@@ -109,9 +114,9 @@ class MainRunner():
         """
         print(f"[INFO] Extracting audio from {self.input_file}")
         start_time = time.time()
-        self.audio_output = str(self.input_file.parent / f'{self.input_file.stem}_audio.aac')
+        self.audio_output = str(self.input_file.parent / f'{self.input_file.stem}.aac')
         if self.end_time:
-            subprocess.run([
+            self._run_subprocess([
                 'ffmpeg',
                 '-i',
                 str(self.input_file),
@@ -122,9 +127,9 @@ class MainRunner():
                 f'{self.end_time/1000:.3f}',
                 '-y',
                 self.audio_output
-                ], check=True)
+                ])
         else:
-            subprocess.run([
+            self._run_subprocess([
                 'ffmpeg',
                 '-i',
                 str(self.input_file),
@@ -133,7 +138,7 @@ class MainRunner():
                 'copy',
                 '-y',
                 self.audio_output
-                ], check=True)
+                ])
         print(f"[INFO] Audio extraction completed in {time.time() - start_time:.3f} seconds")
     
     def extract_frames(self):
@@ -164,7 +169,7 @@ class MainRunner():
             ret, frame = cap.read()
             if ret:
                 timestamp = cap.get(cv2.CAP_PROP_POS_MSEC)
-                frame_name = str(timestamp) + ".jpg"
+                frame_name = str(i) + ".png"
                 frame_path = os.path.join(self.frames_dir, frame_name)
 
                 # Save frame to file
@@ -192,6 +197,8 @@ class MainRunner():
                             + subs[sub_idx].start.to_time().minute * 60000 \
                             + subs[sub_idx].start.to_time().second * 1000 \
                             + subs[sub_idx].start.to_time().microsecond // 1000
+            if start_time_ms > self.end_time:
+                break
             end_time_ms = subs[sub_idx].end.to_time().hour * 3600000 \
                             + subs[sub_idx].end.to_time().minute * 60000 \
                             + subs[sub_idx].end.to_time().second * 1000 \
@@ -206,14 +213,9 @@ class MainRunner():
                 print(f"[WARNING] No frames found between {start_time_ms} and {end_time_ms}")
     
     def create_video_from_frames(self):
-        frame_files = natsorted((os.listdir(self.frames_dir)))
-        cmd = ["ffmpeg", "-r", str(self.fps)]
+        cmd = ["ffmpeg", "-r", str(self.fps),"-i", f"{self.frames_dir}/%d.png", "-i", self.audio_output, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", self.output_file]
 
-        # Add frames to the video clip
-        for frame in frame_files:
-            cmd.extend(["-i", f"{self.frames_dir}/{frame}"])
-        cmd.extend(["-i", self.audio_output, "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest", str(self.output_file)])
-        subprocess.run(cmd, check=True)
+        self._run_subprocess(cmd)
 
     def _get_frames_between_timestamps(self, start_time, end_time):
         conn = sqlite3.connect(self.db_file)
