@@ -6,9 +6,10 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List
 
 try:
-    from dynamic_subtitles.substyles.base import BaseSubstyle
+    from substyles.base import BaseSubstyles
 except ImportError:
-    from substyles.base import BaseSubstyle
+    from dynamic_subtitles.substyles.base import BaseSubstyle
+    
 
 class DefaultSubstyle(BaseSubstyle):
     def __init__(self,

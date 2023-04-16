@@ -13,9 +13,9 @@ import re
 import tqdm
 
 try:
-    from dynamic_subtitles.substyles.base import BaseSubstyle
-except ModuleNotFoundError:
     from substyles.base import BaseSubstyle
+except ModuleNotFoundError:
+    from dynamic_subtitles.substyles.base import BaseSubstyle
 
 class MainRunner():
     def __init__(self, 
